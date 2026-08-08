@@ -4,13 +4,24 @@ import {
   ForbiddenException,
 } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
+import { ProjectRole } from '@prisma/client';
 import { CreateCommentDto, UpdateCommentDto } from './dto/comment.dto';
+import { NotificationsService } from '../notifications/notifications.service';
+import { NotificationsGateway } from '../notifications/notifications.gateway';
 
 @Injectable()
 export class CommentsService {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private notificationsService: NotificationsService,
+    private notificationsGateway: NotificationsGateway,
+  ) {}
 
-  async create(taskId: string, createCommentDto: CreateCommentDto, userId: string) {
+  async create(
+    taskId: string,
+    createCommentDto: CreateCommentDto,
+    userId: string,
+  ) {
     const task = await this.prisma.task.findUnique({ where: { id: taskId } });
 
     if (!task) {
@@ -42,6 +53,20 @@ export class CommentsService {
         metadata: { content: comment.content.substring(0, 100) },
       },
     });
+
+    if (task.assigneeId && task.assigneeId !== userId) {
+      const notification = await this.notificationsService.create(
+        task.assigneeId,
+        {
+          type: 'COMMENT_ADDED',
+          title: 'New comment on task',
+          message: `A comment was added to "${task.title}"`,
+          entityId: taskId,
+          entityType: 'Task',
+        },
+      );
+      this.notificationsGateway.emitNotification(task.assigneeId, notification);
+    }
 
     return comment;
   }
@@ -80,6 +105,8 @@ export class CommentsService {
       throw new ForbiddenException('You can only edit your own comments');
     }
 
+    await this.assertMember(comment.task.projectId, userId);
+
     return this.prisma.comment.update({
       where: { id },
       data: { content: updateCommentDto.content },
@@ -111,7 +138,7 @@ export class CommentsService {
     });
 
     const isAuthor = comment.authorId === userId;
-    const isAdmin = member?.role === 'ADMIN';
+    const isAdmin = member?.role === ProjectRole.ADMIN;
 
     if (!isAuthor && !isAdmin) {
       throw new ForbiddenException('You can only delete your own comments');

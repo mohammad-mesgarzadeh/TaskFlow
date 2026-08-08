@@ -14,6 +14,7 @@ import { SprintsModule } from './modules/sprints/sprints.module';
 import { SearchModule } from './modules/search/search.module';
 import { NotificationsModule } from './modules/notifications/notifications.module';
 import { DashboardModule } from './modules/dashboard/dashboard.module';
+import { HealthModule } from './modules/health/health.module';
 
 @Module({
   imports: [
@@ -30,6 +31,7 @@ import { DashboardModule } from './modules/dashboard/dashboard.module';
     SearchModule,
     NotificationsModule,
     DashboardModule,
+    HealthModule,
   ],
   controllers: [LabelsController],
   providers: [LabelsService],

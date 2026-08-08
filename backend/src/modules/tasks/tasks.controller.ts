@@ -72,9 +72,14 @@ export class TasksController {
   @Put('reorder/bulk')
   @ApiOperation({ summary: 'Bulk reorder tasks' })
   async bulkReorder(
+    @Param('projectId', ParseUUIDPipe) projectId: string,
     @Body() bulkReorderDto: BulkReorderDto,
     @CurrentUser('id') userId: string,
   ) {
-    return this.tasksService.bulkReorder(bulkReorderDto.tasks, userId);
+    return this.tasksService.bulkReorder(
+      projectId,
+      bulkReorderDto.tasks,
+      userId,
+    );
   }
 }

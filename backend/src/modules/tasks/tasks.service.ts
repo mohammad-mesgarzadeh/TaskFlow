@@ -2,17 +2,30 @@ import {
   Injectable,
   NotFoundException,
   ForbiddenException,
+  BadRequestException,
 } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { CreateTaskDto, UpdateTaskDto } from './dto/task.dto';
-import { ProjectRole, TaskStatus } from '@prisma/client';
+import { TaskStatus } from '@prisma/client';
+import { NotificationsService } from '../notifications/notifications.service';
+import { NotificationsGateway } from '../notifications/notifications.gateway';
 
 @Injectable()
 export class TasksService {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private notificationsService: NotificationsService,
+    private notificationsGateway: NotificationsGateway,
+  ) {}
 
-  async create(projectId: string, createTaskDto: CreateTaskDto, userId: string) {
+  async create(
+    projectId: string,
+    createTaskDto: CreateTaskDto,
+    userId: string,
+  ) {
     await this.assertMember(projectId, userId);
+    await this.assertAssigneesAreMembers(projectId, createTaskDto.assigneeId);
+    await this.assertLabelsBelongToProject(projectId, createTaskDto.labelIds);
 
     const maxOrder = await this.prisma.task.aggregate({
       where: {
@@ -55,6 +68,18 @@ export class TasksService {
       metadata: { title: task.title },
     });
 
+    if (createTaskDto.assigneeId && createTaskDto.assigneeId !== userId) {
+      await this.notifyAssignee(
+        createTaskDto.assigneeId,
+        'TASK_ASSIGNED',
+        'Task assigned to you',
+        `"${task.title}" has been assigned to you`,
+        task.id,
+      );
+    }
+
+    this.notificationsGateway.emitTaskCreated(projectId, task);
+
     return task;
   }
 
@@ -96,17 +121,35 @@ export class TasksService {
     }
 
     await this.assertMember(existing.projectId, userId);
+    await this.assertAssigneesAreMembers(
+      existing.projectId,
+      updateTaskDto.assigneeId,
+    );
+    await this.assertLabelsBelongToProject(
+      existing.projectId,
+      updateTaskDto.labelIds,
+    );
 
     const changes: Record<string, unknown> = {};
     if (updateTaskDto.title !== undefined) changes.title = updateTaskDto.title;
-    if (updateTaskDto.description !== undefined) changes.description = updateTaskDto.description;
-    if (updateTaskDto.status !== undefined) changes.status = updateTaskDto.status;
-    if (updateTaskDto.priority !== undefined) changes.priority = updateTaskDto.priority;
+    if (updateTaskDto.description !== undefined)
+      changes.description = updateTaskDto.description;
+    if (updateTaskDto.status !== undefined)
+      changes.status = updateTaskDto.status;
+    if (updateTaskDto.priority !== undefined)
+      changes.priority = updateTaskDto.priority;
     if (updateTaskDto.type !== undefined) changes.type = updateTaskDto.type;
-    if (updateTaskDto.dueDate !== undefined) changes.dueDate = updateTaskDto.dueDate ? new Date(updateTaskDto.dueDate) : null;
-    if (updateTaskDto.assigneeId !== undefined) changes.assigneeId = updateTaskDto.assigneeId || null;
+    if (updateTaskDto.dueDate !== undefined)
+      changes.dueDate = updateTaskDto.dueDate
+        ? new Date(updateTaskDto.dueDate)
+        : null;
+    if (updateTaskDto.assigneeId !== undefined)
+      changes.assigneeId = updateTaskDto.assigneeId || null;
 
-    if (updateTaskDto.status !== undefined && updateTaskDto.status !== existing.status) {
+    if (
+      updateTaskDto.status !== undefined &&
+      updateTaskDto.status !== existing.status
+    ) {
       const maxOrder = await this.prisma.task.aggregate({
         where: {
           projectId: existing.projectId,
@@ -142,9 +185,22 @@ export class TasksService {
         userId,
         metadata: { from: existing.status, to: updateTaskDto.status },
       });
+
+      if (existing.assigneeId && existing.assigneeId !== userId) {
+        await this.notifyAssignee(
+          existing.assigneeId,
+          'TASK_STATUS_CHANGED',
+          'Task status updated',
+          `"${task.title}" moved to ${updateTaskDto.status.replace('_', ' ')}`,
+          task.id,
+        );
+      }
     }
 
-    if (updateTaskDto.assigneeId !== undefined && updateTaskDto.assigneeId !== existing.assigneeId) {
+    if (
+      updateTaskDto.assigneeId !== undefined &&
+      updateTaskDto.assigneeId !== existing.assigneeId
+    ) {
       await this.logActivity({
         action: updateTaskDto.assigneeId ? 'ASSIGNED' : 'UNASSIGNED',
         entityType: 'Task',
@@ -153,9 +209,22 @@ export class TasksService {
         userId,
         metadata: { assigneeId: updateTaskDto.assigneeId },
       });
+
+      if (updateTaskDto.assigneeId && updateTaskDto.assigneeId !== userId) {
+        await this.notifyAssignee(
+          updateTaskDto.assigneeId,
+          'TASK_ASSIGNED',
+          'Task assigned to you',
+          `"${task.title}" has been assigned to you`,
+          task.id,
+        );
+      }
     }
 
-    if (updateTaskDto.priority && updateTaskDto.priority !== existing.priority) {
+    if (
+      updateTaskDto.priority &&
+      updateTaskDto.priority !== existing.priority
+    ) {
       await this.logActivity({
         action: 'PRIORITY_CHANGED',
         entityType: 'Task',
@@ -164,7 +233,19 @@ export class TasksService {
         userId,
         metadata: { from: existing.priority, to: updateTaskDto.priority },
       });
+
+      if (existing.assigneeId && existing.assigneeId !== userId) {
+        await this.notifyAssignee(
+          existing.assigneeId,
+          'TASK_PRIORITY_CHANGED',
+          'Task priority updated',
+          `"${task.title}" priority changed to ${updateTaskDto.priority.replace('_', ' ')}`,
+          task.id,
+        );
+      }
     }
+
+    this.notificationsGateway.emitTaskUpdate(existing.projectId, task);
 
     return task;
   }
@@ -188,15 +269,45 @@ export class TasksService {
       metadata: { title: task.title },
     });
 
+    if (task.assigneeId && task.assigneeId !== userId) {
+      await this.notifyAssignee(
+        task.assigneeId,
+        'TASK_DELETED',
+        'Task deleted',
+        `"${task.title}" was deleted`,
+        id,
+      );
+    }
+
+    this.notificationsGateway.emitTaskDeleted(task.projectId, {
+      id: task.id,
+    });
+
     return { message: 'Task deleted successfully' };
   }
 
-  async bulkReorder(tasks: { taskId: string; status: TaskStatus; order: number }[], userId: string) {
+  async bulkReorder(
+    projectId: string,
+    tasks: { taskId: string; status: TaskStatus; order: number }[],
+    userId: string,
+  ) {
+    await this.assertMember(projectId, userId);
+
+    const taskIds = tasks.map((t) => t.taskId);
+    const found = await this.prisma.task.findMany({
+      where: { id: { in: taskIds }, projectId },
+      select: { id: true },
+    });
+
+    if (found.length !== taskIds.length) {
+      throw new BadRequestException('Some tasks not found in this project');
+    }
+
     const updates = tasks.map((t) =>
       this.prisma.task.update({
         where: { id: t.taskId },
         data: { status: t.status, order: t.order },
-      })
+      }),
     );
 
     await this.prisma.$transaction(updates);
@@ -234,6 +345,61 @@ export class TasksService {
     return member;
   }
 
+  private async assertAssigneesAreMembers(
+    projectId: string,
+    assigneeId?: string | null,
+  ) {
+    if (!assigneeId) return;
+
+    const assignee = await this.prisma.projectMember.findUnique({
+      where: {
+        userId_projectId: { userId: assigneeId, projectId },
+      },
+    });
+
+    if (!assignee) {
+      throw new BadRequestException(
+        'Assignee must be a member of this project',
+      );
+    }
+  }
+
+  private async assertLabelsBelongToProject(
+    projectId: string,
+    labelIds?: string[],
+  ) {
+    if (!labelIds || labelIds.length === 0) return;
+
+    const labels = await this.prisma.label.findMany({
+      where: { id: { in: labelIds }, projectId },
+      select: { id: true },
+    });
+
+    if (labels.length !== labelIds.length) {
+      throw new BadRequestException(
+        'One or more labels do not belong to this project',
+      );
+    }
+  }
+
+  private async notifyAssignee(
+    assigneeId: string,
+    type: string,
+    title: string,
+    message: string,
+    entityId: string,
+  ) {
+    const notification = await this.notificationsService.create(assigneeId, {
+      type,
+      title,
+      message,
+      entityId,
+      entityType: 'Task',
+    });
+
+    this.notificationsGateway.emitNotification(assigneeId, notification);
+  }
+
   private async logActivity(data: {
     action: string;
     entityType: string;
@@ -249,7 +415,9 @@ export class TasksService {
         entityId: data.entityId,
         taskId: data.taskId || null,
         userId: data.userId,
-        ...(data.metadata ? { metadata: data.metadata as unknown as Record<string, string> } : {}),
+        ...(data.metadata
+          ? { metadata: data.metadata as unknown as Record<string, string> }
+          : {}),
       },
     });
   }

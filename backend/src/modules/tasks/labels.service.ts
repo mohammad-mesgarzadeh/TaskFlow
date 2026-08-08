@@ -2,6 +2,7 @@ import {
   Injectable,
   NotFoundException,
   ConflictException,
+  ForbiddenException,
 } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { CreateLabelDto, UpdateLabelDto } from './dto/label.dto';
@@ -10,7 +11,13 @@ import { CreateLabelDto, UpdateLabelDto } from './dto/label.dto';
 export class LabelsService {
   constructor(private prisma: PrismaService) {}
 
-  async create(projectId: string, createLabelDto: CreateLabelDto) {
+  async create(
+    projectId: string,
+    createLabelDto: CreateLabelDto,
+    userId: string,
+  ) {
+    await this.assertMember(projectId, userId);
+
     const existing = await this.prisma.label.findFirst({
       where: {
         name: createLabelDto.name,
@@ -31,19 +38,23 @@ export class LabelsService {
     });
   }
 
-  async findAll(projectId: string) {
+  async findAll(projectId: string, userId: string) {
+    await this.assertMember(projectId, userId);
+
     return this.prisma.label.findMany({
       where: { projectId },
       orderBy: { name: 'asc' },
     });
   }
 
-  async update(id: string, updateLabelDto: UpdateLabelDto) {
+  async update(id: string, updateLabelDto: UpdateLabelDto, userId: string) {
     const label = await this.prisma.label.findUnique({ where: { id } });
 
     if (!label) {
       throw new NotFoundException('Label not found');
     }
+
+    await this.assertMember(label.projectId, userId);
 
     return this.prisma.label.update({
       where: { id },
@@ -51,15 +62,31 @@ export class LabelsService {
     });
   }
 
-  async remove(id: string) {
+  async remove(id: string, userId: string) {
     const label = await this.prisma.label.findUnique({ where: { id } });
 
     if (!label) {
       throw new NotFoundException('Label not found');
     }
 
+    await this.assertMember(label.projectId, userId);
+
     await this.prisma.label.delete({ where: { id } });
 
     return { message: 'Label deleted successfully' };
+  }
+
+  private async assertMember(projectId: string, userId: string) {
+    const member = await this.prisma.projectMember.findUnique({
+      where: {
+        userId_projectId: { userId, projectId },
+      },
+    });
+
+    if (!member) {
+      throw new ForbiddenException('You are not a member of this project');
+    }
+
+    return member;
   }
 }

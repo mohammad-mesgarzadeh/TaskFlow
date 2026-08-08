@@ -13,6 +13,7 @@ import { AuthGuard } from '@nestjs/passport';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { LabelsService } from './labels.service';
 import { CreateLabelDto, UpdateLabelDto } from './dto/label.dto';
+import { CurrentUser } from '../../common/decorators/current-user.decorator';
 
 @ApiTags('Labels')
 @ApiBearerAuth()
@@ -26,14 +27,18 @@ export class LabelsController {
   async create(
     @Param('projectId', ParseUUIDPipe) projectId: string,
     @Body() createLabelDto: CreateLabelDto,
+    @CurrentUser('id') userId: string,
   ) {
-    return this.labelsService.create(projectId, createLabelDto);
+    return this.labelsService.create(projectId, createLabelDto, userId);
   }
 
   @Get()
   @ApiOperation({ summary: 'Get all labels for a project' })
-  async findAll(@Param('projectId', ParseUUIDPipe) projectId: string) {
-    return this.labelsService.findAll(projectId);
+  async findAll(
+    @Param('projectId', ParseUUIDPipe) projectId: string,
+    @CurrentUser('id') userId: string,
+  ) {
+    return this.labelsService.findAll(projectId, userId);
   }
 
   @Put(':id')
@@ -41,13 +46,17 @@ export class LabelsController {
   async update(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() updateLabelDto: UpdateLabelDto,
+    @CurrentUser('id') userId: string,
   ) {
-    return this.labelsService.update(id, updateLabelDto);
+    return this.labelsService.update(id, updateLabelDto, userId);
   }
 
   @Delete(':id')
   @ApiOperation({ summary: 'Delete a label' })
-  async remove(@Param('id', ParseUUIDPipe) id: string) {
-    return this.labelsService.remove(id);
+  async remove(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser('id') userId: string,
+  ) {
+    return this.labelsService.remove(id, userId);
   }
 }
