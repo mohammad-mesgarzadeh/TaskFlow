@@ -14,7 +14,7 @@ interface CreateTaskPayload {
 
 interface UpdateTaskPayload extends Partial<CreateTaskPayload> {}
 
-interface ApiResponse<T> {
+export interface ApiResponse<T> {
   data: T;
   statusCode: number;
   timestamp: string;

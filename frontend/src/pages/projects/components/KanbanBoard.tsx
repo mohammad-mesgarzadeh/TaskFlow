@@ -15,7 +15,7 @@ import {
   verticalListSortingStrategy,
 } from '@dnd-kit/sortable';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { tasksApi } from '@/api/queries/tasks';
+import { tasksApi, type ApiResponse } from '@/api/queries/tasks';
 import { TaskStatus, type Task } from '@/types';
 import { KanbanColumn } from './KanbanColumn';
 import { KanbanCard } from './KanbanCard';
@@ -88,18 +88,24 @@ export function KanbanBoard({ tasks, projectId, onCreateTask, onEditTask, onDele
     const overTask = tasks.find((t) => t.id === overId);
 
     if (overColumn && activeTask.status !== overColumn.id) {
-      queryClient.setQueryData(['tasks', projectId], (old: Task[] | undefined) => {
+      queryClient.setQueryData(['tasks', projectId], (old: ApiResponse<Task[]> | undefined) => {
         if (!old) return old;
-        return old.map((t) =>
-          t.id === activeId ? { ...t, status: overColumn.id } : t
-        );
+        return {
+          ...old,
+          data: old.data.map((t) =>
+            t.id === activeId ? { ...t, status: overColumn.id } : t
+          ),
+        };
       });
     } else if (overTask && activeTask.status !== overTask.status) {
-      queryClient.setQueryData(['tasks', projectId], (old: Task[] | undefined) => {
+      queryClient.setQueryData(['tasks', projectId], (old: ApiResponse<Task[]> | undefined) => {
         if (!old) return old;
-        return old.map((t) =>
-          t.id === activeId ? { ...t, status: overTask.status } : t
-        );
+        return {
+          ...old,
+          data: old.data.map((t) =>
+            t.id === activeId ? { ...t, status: overTask.status } : t
+          ),
+        };
       });
     }
   };
@@ -139,15 +145,30 @@ export function KanbanBoard({ tasks, projectId, onCreateTask, onEditTask, onDele
       order: index,
     }));
 
-    queryClient.setQueryData(['tasks', projectId], (old: Task[] | undefined) => {
+    const currentTasks = tasksByStatus[targetStatus];
+    const isUnchanged =
+      currentTasks.length === columnTasks.length &&
+      currentTasks.every(
+        (t, i) =>
+          t.id === columnTasks[i].id &&
+          t.status === columnTasks[i].status &&
+          t.order === i
+      );
+
+    if (isUnchanged) return;
+
+    queryClient.setQueryData(['tasks', projectId], (old: ApiResponse<Task[]> | undefined) => {
       if (!old) return old;
-      return old.map((t) => {
-        const update = reorderData.find((r) => r.taskId === t.id);
-        if (update) {
-          return { ...t, status: update.status, order: update.order };
-        }
-        return t;
-      });
+      return {
+        ...old,
+        data: old.data.map((t) => {
+          const update = reorderData.find((r) => r.taskId === t.id);
+          if (update) {
+            return { ...t, status: update.status, order: update.order };
+          }
+          return t;
+        }),
+      };
     });
 
     reorderMutation.mutate(reorderData);
