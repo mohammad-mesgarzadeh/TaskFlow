@@ -2,7 +2,14 @@ name: Deploy
 
 on:
   push:
-    branches: [main]
+    branches:
+      - main
+
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
 
 env:
   REGISTRY: ghcr.io
@@ -12,13 +19,12 @@ jobs:
   build-and-push:
     name: Build & Push Images
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
-    steps:
-      - uses: actions/checkout@v4
 
-      - name: Log in to Container Registry
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Log in to GitHub Container Registry
         uses: docker/login-action@v3
         with:
           registry: ${{ env.REGISTRY }}
@@ -43,16 +49,16 @@ jobs:
             type=sha
             type=raw,value=latest
 
-      - name: Build and push Backend
-        uses: docker/build-push-action@v5
+      - name: Build and push Backend image
+        uses: docker/build-push-action@v6
         with:
           context: ./backend
           push: true
           tags: ${{ steps.meta-backend.outputs.tags }}
           labels: ${{ steps.meta-backend.outputs.labels }}
 
-      - name: Build and push Frontend
-        uses: docker/build-push-action@v5
+      - name: Build and push Frontend image
+        uses: docker/build-push-action@v6
         with:
           context: ./frontend
           push: true
@@ -64,8 +70,33 @@ jobs:
     runs-on: ubuntu-latest
     needs: build-and-push
     if: github.ref == 'refs/heads/main'
+
     steps:
-      - uses: actions/checkout@v4
+      - name: Validate deployment secrets
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_KEY: ${{ secrets.DEPLOY_KEY }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [[ -z "$DEPLOY_HOST" ]]; then
+            echo "::error::DEPLOY_HOST secret is missing or empty."
+            exit 1
+          fi
+
+          if [[ -z "$DEPLOY_USER" ]]; then
+            echo "::error::DEPLOY_USER secret is missing or empty."
+            exit 1
+          fi
+
+          if [[ -z "$DEPLOY_KEY" ]]; then
+            echo "::error::DEPLOY_KEY secret is missing or empty."
+            exit 1
+          fi
+
+          echo "Deployment secrets validation passed."
 
       - name: Deploy via SSH
         uses: appleboy/ssh-action@v1
@@ -73,9 +104,24 @@ jobs:
           host: ${{ secrets.DEPLOY_HOST }}
           username: ${{ secrets.DEPLOY_USER }}
           key: ${{ secrets.DEPLOY_KEY }}
+          command_timeout: 15m
+          script_stop: true
           script: |
-            cd ${{ secrets.DEPLOY_PATH || '/opt/taskflow' }}
+            set -e
+
+            cd "${{ secrets.DEPLOY_PATH || '/opt/taskflow' }}"
+
+            echo "Pulling latest repository changes..."
             git pull origin main
+
+            echo "Pulling latest Docker images..."
             docker compose pull
+
+            echo "Starting application..."
             docker compose up -d --remove-orphans
+
+            echo "Removing unused Docker resources..."
             docker system prune -f
+
+            echo "Deployment completed successfully."
+
